@@ -1,0 +1,2 @@
+osource "C:/Fall2020/Projects/7570/MeshNetworkProject/zephyrproject/zephyr/soc/$(ARCH)/Kconfig"
+osource "C:/Fall2020/Projects/7570/MeshNetworkProject/zephyrproject/zephyr/soc/$(ARCH)/*/Kconfig"
