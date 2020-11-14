@@ -19,14 +19,15 @@ enum font_size {
 	FONT_BIG = 2,
 };
 
-void board_refresh_display(void);
+
 size_t first_name_len(const char *name);
 void show_main(void);
-void show_sensors_data(k_timeout_t);
+void show_node_status();
+void show_node_track( k_timeout_t duration);
 
 void board_show_text(const char *text, bool center, k_timeout_t duration);
 void board_blink_leds(void);
-void board_add_hello(uint16_t addr, const char *name);
+void board_add_hello(uint16_t addr, const char *name ,int8_t rssi, int16_t distance );
 int set_led_state(uint8_t id, bool state);
 int periphs_init(void);
 int board_init(void);

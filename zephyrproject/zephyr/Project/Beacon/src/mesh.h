@@ -38,8 +38,6 @@ void send_hello(uint16_t prov_addr);
 uint16_t get_my_addr(void);
 uint16_t get_prov_addr(void);
 
-uint8_t * get_net_key(void);
-char * get_app_key(void);
 const uint8_t * get_uuid(void);
 
 bool mesh_is_initialized(void);

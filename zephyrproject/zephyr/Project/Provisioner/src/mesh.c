@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/printk.h>
 #include <stdio.h>
+#include <math.h>
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/mesh.h>
@@ -60,31 +61,57 @@ static struct bt_mesh_cfg_cli cfg_cli = {
 
 };
 
+static double power(float base, float exponent)
+{
+    double power = 1.0;
+    int i;
+ 
+    while (exponent < 0)
+    {
+        {
+            power = power/base;
+            exponent++;
+        }
+    }
+    if(exponent >0)
+    {
+        /*Calculate power */
+        for(i = 1; i <= exponent; i++)
+        {
+            power = power * base;
+        }
+    } 
+    return power;
+}
+
+static int16_t Calculate_distance_in_meters(int8_t rssi)
+{
+   double default_tx= 0.0 ; // default tx power of nrf52 chip is 0dm
+   double env_factor  = 4.0  ; // constant for environment factor . Range 2 to 4
+   double exp =  (default_tx - rssi ) / (10 * env_factor);
+   double base = 10.0;
+   double result = power(base, exp) ;
+   int16_t distance = (int16_t) result;
+   return distance;
+}
+
 static void vnd_hello(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 		      struct net_buf_simple *buf, int8_t rssi)
 {
 	char str[32];
-
-	char displaystr[32];
 	size_t len;
-
-	printk("Hello message from 0x%04x\n\n", ctx->addr);
 
 	if (ctx->addr == bt_mesh_model_elem(model)->addr) {
 		return;
 	}
-
 	len = MIN(buf->len, HELLO_MAX);
 	memcpy(str, buf->data, len);
 	str[len] = '\0';
-
-	board_add_hello(ctx->addr, str);
-	sprintf(displaystr, " says hi! %d", rssi);
-	strcat(str,displaystr);
-	board_show_text(str, false, K_SECONDS(5));
-
+	uint16_t distance  = Calculate_distance_in_meters(rssi);
+	printk("Hello message from Node: 0x%04x : %s , Rssi: %d, Distance : %d metres \n\n", ctx->addr , str , rssi, distance);
+	board_add_hello(ctx->addr , str, rssi ,distance);
 	board_blink_leds();
-	show_main();
+	show_node_status();
 }
 
 static struct bt_mesh_model root_models[] = {
@@ -212,9 +239,7 @@ static void configure_node(struct bt_mesh_cdb_node *node)
 	}
 	printk("Node Configuration completed\n\n");
 	send_hello(node->addr);
-	k_sleep(K_SECONDS(5));
 	show_main();
-	k_sleep(K_SECONDS(5));
 }
 
 //call back function for Provisioner after detecting the beacon node and reads its UUID
@@ -289,6 +314,7 @@ static int bt_ready(void)
 
 	//provision self
 	uint8_t dev_key[16];
+	
 	bt_rand(dev_key, 16);
 	memcpy(device_key, dev_key, 16);
 	printk("Self Provisioning started\n");
@@ -299,14 +325,17 @@ static int bt_ready(void)
 			continue;
 		}
 	} while (!addr);
-
 	/* Make sure it's a unicast address (highest bit unset) */
 	addr &= ~0x8000;
 	self_addr = addr;
-	err = bt_mesh_provision(net_key, NET_IDX, FLAGS, IV_INDEX, addr,dev_key);
+	if(mesh_is_initialized())
+		self_addr = elements[0].addr;
 
+	err = bt_mesh_provision(net_key, NET_IDX, FLAGS, IV_INDEX, self_addr,dev_key);
 	if (err == -EALREADY) {
+		printk("Already provisioned \n");
 		printk("Using stored settings\n");
+		printk("Self Provisioned Address  0x%04x\n\n", self_addr);
 	} else if (err) {
 		printk("Provisioning failed (err %d)\n", err);
 		return err;
@@ -330,7 +359,12 @@ static uint8_t check_unconfigured(struct bt_mesh_cdb_node *node, void *data)
 			configure_node(node);
 		}
 	}
-
+	else
+	{
+		if (node->addr != self_addr) 
+			send_hello(node->addr);
+	}
+	
 	return BT_MESH_CDB_ITER_CONTINUE;
 }
 
@@ -341,7 +375,8 @@ void mesh_start(void)
 	/* Initialize the Bluetooth Subsystem */
 	err = bt_enable(NULL);
 	bt_ready();
-
+	//bt_mesh_cdb_node_foreach(del_node,NULL);
+	show_main();
 	//provision and confiure nodes
 	while (1) {
 		k_sem_reset(&sem_unprov_beacon);
@@ -389,13 +424,13 @@ const uint8_t *get_uuid(void)
 
 bool mesh_is_initialized(void)
 {
-	return self_addr != BT_MESH_ADDR_UNASSIGNED;
+	return elements[0].addr != BT_MESH_ADDR_UNASSIGNED;
 }
 
 
 uint16_t get_my_addr(void)
 {
-	return self_addr;
+	return elements[0].addr;
 }
 
 const uint8_t *get_net_key(void)

@@ -19,12 +19,6 @@
 #include "board.h"
 
 
-enum font_size {
-	FONT_SMALL = 0,
-	FONT_MEDIUM = 1,
-	FONT_BIG = 2,
-};
-
 enum screen_ids {
 	SCREEN_MAIN = 0,
 	SCREEN_SENSORS = 1,
@@ -244,8 +238,6 @@ _error_get:
 	printk("Failed to get sensor data or print a string\n");
 }
 
-
-
 void show_main(void)
 {
 	char str[100];
@@ -296,15 +288,6 @@ void show_main(void)
 		len = snprintk(str, sizeof(str), "Provisioner Addr:0x%04x\n", get_prov_addr());
 		print_line(FONT_SMALL, line++, str, len, false);
 
-		char net_key_str[100];
-		bin2hex(get_net_key(), 8, net_key_str, sizeof(net_key_str));
-		len = snprintk(str, sizeof(str), "N/w key: %s", net_key_str);
-		print_line(FONT_SMALL, line++, str, len, false);
-
-		char app_key_str[100];
-		bin2hex(get_app_key(), 8, app_key_str, sizeof(app_key_str));
-		len = snprintk(str, sizeof(str), "App key: %s", app_key_str);
-		print_line(FONT_SMALL, line++, str, len, false);
 	}
 	cfb_framebuffer_finalize(epd_dev);
 }
@@ -438,16 +421,6 @@ static int configure_leds(void)
 	return 0;
 }
 
-static int erase_storage(void)
-{
-	const struct device *dev;
-
-	dev = device_get_binding(DT_CHOSEN_ZEPHYR_FLASH_CONTROLLER_LABEL);
-
-	return flash_erase(dev, FLASH_AREA_OFFSET(storage),
-			   FLASH_AREA_SIZE(storage));
-}
-
 void board_refresh_display(void)
 {
 	k_delayed_work_submit(&epd_work, K_NO_WAIT);
@@ -482,11 +455,11 @@ int board_init(void)
 	k_delayed_work_init(&long_press_work, long_press);
 
 	pressed = button_is_pressed();
-	if (pressed) {
-		printk("Erasing storage\n");
-		board_show_text("Resetting Device", false, K_SECONDS(4));
-		erase_storage();
-	}
+	// if (pressed) {
+	// 	printk("Erasing storage\n");
+	// 	board_show_text("Resetting Device", false, K_SECONDS(4));
+	// 	erase_storage();
+	// }
 
 	return 0;
 }

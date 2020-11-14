@@ -336,10 +336,10 @@ const struct prov_bearer_cb *bt_mesh_prov_bearer_cb_get(void)
 	return &prov_bearer_cb;
 }
 
-void bt_mesh_prov_complete(uint16_t net_idx, uint16_t addr,const uint8_t net_key[16])
+void bt_mesh_prov_complete(uint16_t net_idx, uint16_t addr)
 {
 	if (bt_mesh_prov->complete) {
-		bt_mesh_prov->complete(net_idx, addr,net_key);
+		bt_mesh_prov->complete(net_idx, addr);
 	}
 }
 

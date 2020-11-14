@@ -23,12 +23,6 @@
 #include "mesh.h"
 #include "board.h"
 
-enum screen_ids {
-	SCREEN_MAIN = 0,
-
-	SCREEN_LAST,
-};
-
 struct font_info {
 	uint8_t columns;
 } fonts[] = {
@@ -37,16 +31,11 @@ struct font_info {
 	[FONT_SMALL] = { .columns = 25 },
 };
 
-#define LONG_PRESS_TIMEOUT K_SECONDS(1)
-
 #define STAT_COUNT 128
 
 static const struct device *epd_dev;
 static bool pressed;
-static uint8_t screen_id = SCREEN_MAIN;
 static const struct device *gpio;
-static struct k_delayed_work epd_work;
-static struct k_delayed_work long_press_work;
 
 static struct {
 	const struct device *dev;
@@ -142,53 +131,12 @@ void board_blink_leds(void)
 	k_delayed_work_submit(&led_timer, K_MSEC(100));
 }
 
-static void clear_screen(void)
-{
-	/*clear screen*/
-	uint8_t ppt = cfb_get_display_parameter(epd_dev, CFB_DISPLAY_PPT);
-	for (int i = 0; i < 15; i++) {
-		cfb_print(epd_dev,
-			  "                                               ", 0,
-			  i * ppt);
-	}
-}
-
-void board_show_text(const char *text, bool center, k_timeout_t duration)
-{
-	int i;
-
-	cfb_framebuffer_clear(epd_dev, true);
-	clear_screen();
-
-	for (i = 0; i < 3; i++) {
-		size_t len;
-
-		while (*text == ' ' || *text == '\n') {
-			text++;
-		}
-
-		len = get_len(FONT_BIG, text);
-		if (!len) {
-			break;
-		}
-
-		text += print_line(FONT_MEDIUM, i, text, len, center);
-		if (!*text) {
-			break;
-		}
-	}
-
-	cfb_framebuffer_finalize(epd_dev);
-
-	if (!K_TIMEOUT_EQ(duration, K_FOREVER)) {
-		k_delayed_work_submit(&epd_work, duration);
-	}
-}
 
 static struct stat {
 	uint16_t addr;
 	char name[9];
-
+	int8_t rssi;
+	int16_t distance;
 	uint16_t hello_count;
 
 } stats[STAT_COUNT] = {
@@ -199,7 +147,7 @@ static uint32_t stat_count;
 
 #define NO_UPDATE -1
 
-static int add_hello(uint16_t addr, const char *name)
+static int add_hello(uint16_t addr, const char *name ,int8_t rssi, int16_t distance)
 {
 	int i;
 
@@ -209,6 +157,8 @@ static int add_hello(uint16_t addr, const char *name)
 		if (!stat->addr) {
 			stat->addr = addr;
 			strncpy(stat->name, name, sizeof(stat->name) - 1);
+			stat->distance = distance;
+			stat->rssi = rssi;
 			stat->hello_count = 1U;
 			stat_count++;
 			return i;
@@ -217,7 +167,8 @@ static int add_hello(uint16_t addr, const char *name)
 		if (stat->addr == addr) {
 			/* Update name, incase it has changed */
 			strncpy(stat->name, name, sizeof(stat->name) - 1);
-
+			stat->distance = distance;
+			stat->rssi = rssi;
 			if (stat->hello_count < 0xffff) {
 				stat->hello_count++;
 				return i;
@@ -230,11 +181,11 @@ static int add_hello(uint16_t addr, const char *name)
 	return NO_UPDATE;
 }
 
-void board_add_hello(uint16_t addr, const char *name)
+void board_add_hello(uint16_t addr, const char *name ,int8_t rssi, int16_t distance )
 {
 	uint32_t sort_i;
 
-	sort_i = add_hello(addr, name);
+	sort_i = add_hello(addr, name,rssi,distance);
 	if (sort_i != NO_UPDATE) {
 	}
 }
@@ -244,7 +195,6 @@ void show_main(void)
 	char str[100];
 	int len, line = 0;
 	cfb_framebuffer_clear(epd_dev, true);
-	clear_screen();
 
 	len = snprintk(str, sizeof(str), "Mesh Info:\n");
 	print_line(FONT_SMALL, line++, str, len, true);
@@ -277,22 +227,90 @@ void show_main(void)
 	cfb_framebuffer_finalize(epd_dev);
 }
 
-static void epd_update(struct k_work *work)
+void board_show_text(const char *text, bool center, k_timeout_t duration)
 {
-	switch (screen_id) {
-	case SCREEN_MAIN:
+	int i;
+
+	cfb_framebuffer_clear(epd_dev, true);
+
+	for (i = 0; i < 3; i++) {
+		size_t len;
+
+		while (*text == ' ' || *text == '\n') {
+			text++;
+		}
+
+		len = get_len(FONT_BIG, text);
+		if (!len) {
+			break;
+		}
+
+		text += print_line(FONT_MEDIUM, i, text, len, center);
+		if (!*text) {
+			break;
+		}
+	}
+
+	cfb_framebuffer_finalize(epd_dev);
+
+	if (!K_TIMEOUT_EQ(duration, K_FOREVER)) {
 		show_main();
-		return;
 	}
 }
 
-static void long_press(struct k_work *work)
+void show_node_status( )
 {
-	/* Treat as release so actual release doesn't send messages */
-	pressed = false;
-	screen_id = (screen_id + 1) % SCREEN_LAST;
-	printk("Change screen to id = %d\n", screen_id);
-	board_refresh_display();
+	char str[100];
+	int len, line = 0;
+	cfb_framebuffer_clear(epd_dev, true);
+
+	int i;
+
+	len = snprintk(str, sizeof(str), "My Addr: 0x%04x \n" ,get_my_addr());
+	print_line(FONT_SMALL, line++, str, len, false);
+
+	len = snprintk(str, sizeof(str), "Messages: \n");
+	print_line(FONT_SMALL, line++, str, len, true);
+
+	for (i = 0; i < stat_count ; i++) {
+		struct stat *stat = &stats[i];
+
+		len = snprintk(str, sizeof(str), "Node Addr: 0x%04x \n" ,stat->addr);
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		len = snprintk(str ,sizeof(str), "Node Name: %s", stat->name);
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		len = snprintk(str, sizeof(str), "Node Rssi: %d", stat->rssi);
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		len = snprintk(str, sizeof(str), "Node Distance: %u meteres", stat->distance);
+		print_line(FONT_SMALL, line++, str, len, false);
+	}
+	cfb_framebuffer_finalize(epd_dev);
+}
+
+void show_node_track( k_timeout_t duration)
+{
+	char str[100];
+	int len, line = 0;
+	cfb_framebuffer_clear(epd_dev, true);
+	//char name[9];
+	int i;
+
+	len = snprintk(str, sizeof(str), "Node Track: \n");
+	print_line(FONT_SMALL, line++, str, len, true);
+
+	for (i = 0; i < ARRAY_SIZE(stats); i++) {
+		//struct stat *stat = &stats[i];
+		//uint16_t distance = stat->distance;
+		//strncpy(stat->name, name, sizeof(stat->name) - 1);
+	}
+	cfb_framebuffer_finalize(epd_dev);
+
+	if (!K_TIMEOUT_EQ(duration, K_FOREVER)) {
+		show_node_status();
+	}
 }
 
 static bool button_is_pressed(void)
@@ -300,41 +318,9 @@ static bool button_is_pressed(void)
 	return gpio_pin_get(gpio, DT_GPIO_PIN(DT_ALIAS(sw0), gpios)) > 0;
 }
 
-static void button_interrupt(const struct device *dev, struct gpio_callback *cb,
-			     uint32_t pins)
-{
-	if (button_is_pressed() == pressed) {
-		return;
-	}
-
-	pressed = !pressed;
-	printk("Button %s\n", pressed ? "pressed" : "released");
-
-	if (pressed) {
-		k_delayed_work_submit(&long_press_work, LONG_PRESS_TIMEOUT);
-		return;
-	}
-
-	k_delayed_work_cancel(&long_press_work);
-
-	if (!mesh_is_initialized()) {
-		printk("Mesh not initializedd");
-		return;
-	}
-
-	/* Short press for views */
-	switch (screen_id) {
-	case SCREEN_MAIN:
-		show_main();
-		return;
-	default:
-		return;
-	}
-}
 
 static int configure_button(void)
 {
-	static struct gpio_callback button_cb;
 
 	gpio = device_get_binding(DT_GPIO_LABEL(DT_ALIAS(sw0), gpios));
 	if (!gpio) {
@@ -346,11 +332,6 @@ static int configure_button(void)
 
 	gpio_pin_interrupt_configure(gpio, DT_GPIO_PIN(DT_ALIAS(sw0), gpios),
 				     GPIO_INT_EDGE_BOTH);
-
-	gpio_init_callback(&button_cb, button_interrupt,
-			   BIT(DT_GPIO_PIN(DT_ALIAS(sw0), gpios)));
-
-	gpio_add_callback(gpio, &button_cb);
 
 	return 0;
 }
@@ -412,10 +393,6 @@ static int erase_storage(void)
 			   FLASH_AREA_SIZE(storage));
 }
 
-void board_refresh_display(void)
-{
-	k_delayed_work_submit(&epd_work, K_NO_WAIT);
-}
 
 int board_init(void)
 {
@@ -441,9 +418,6 @@ int board_init(void)
 		printk("LED init failed\n");
 		return -EIO;
 	}
-
-	k_delayed_work_init(&epd_work, epd_update);
-	k_delayed_work_init(&long_press_work, long_press);
 
 	pressed = button_is_pressed();
 	if (pressed) {

@@ -19,10 +19,20 @@
 #define OP_VND_HELLO      BT_MESH_MODEL_OP_3(OP_HELLO, BT_COMP_ID_LF)
 
 static uint16_t provisioner_addr, node_addr;
-static uint8_t network_key[16];
-static char application_key[32];
 static uint8_t dev_uuid[16] = { 0xdd, 0xee };
 bool is_prov_complete = false;
+bool is_message_recieved_from_prov = false;
+
+static void send_status_thread(uint16_t provisioner_addr)
+{
+		while(1)
+		{
+			//board_show_text("Sending Status \n to Provisioner\n\n ", false, K_SECONDS(5));
+			send_hello(provisioner_addr);
+			show_main();
+			k_sleep(K_SECONDS(8));
+		}
+}
 
 //call back function to receive messages from other nodes
 static void vnd_hello(struct bt_mesh_model *model,
@@ -32,27 +42,17 @@ static void vnd_hello(struct bt_mesh_model *model,
 	char displaystr[32];
 	printk("Message from provisioner : 0x%04x\n", ctx->addr);
 	sprintf(displaystr, "Message \n from Provisioner 0x%04x", ctx->addr);
-	board_show_text(displaystr, false, K_SECONDS(10));
-	k_sleep(K_SECONDS(10));
+	board_show_text(displaystr, false, K_SECONDS(8));
+	show_main();
 	provisioner_addr = ctx->addr;
-	is_prov_complete = true;
+	is_message_recieved_from_prov = true;
 	board_blink_leds();
 
 	char str[32];
 	size_t len =  MIN(buf->len, HELLO_MAX);
 	memcpy(str, buf->data, len);
 	str[len] = '\0';
-	memcpy(application_key , str,32);
-	printk("App key %s\n\n", str);	
-
-	//start sending status 
-	while(1)
-	{
-		board_show_text("Sending Status \n to Provisioner\n\n ", false, K_SECONDS(5));
-		send_hello(provisioner_addr);
-
-		show_main();
-	}
+	send_status_thread(provisioner_addr);
 	
 }
 
@@ -114,36 +114,21 @@ void send_hello(uint16_t prov_addr)
 		return;
 	}
 	printk("Success: Status Sent to provisioner : 0x%04x\n", prov_addr);
-	board_show_text("Success :\n Status Sent \n to provisioner\n\n ", false, K_SECONDS(5));
+	//board_show_text("Success :\n Status Sent \n to provisioner\n\n ", false, K_SECONDS(5));
 }
 
 //callback function for provisioning complete
-static void prov_complete(uint16_t net_idx, uint16_t addr,const uint8_t net_key[16])
+static void prov_complete(uint16_t net_idx, uint16_t addr)
 {
 	node_addr = addr;
 	printk("Provisioned Complete\n");
 	printk("Node Address: 0x%04x\n",addr);
-
-	char net_key_str[32 + 1];
-	memcpy(network_key,net_key,16);
-	bin2hex(net_key, 16, net_key_str, sizeof(net_key_str));
-	printk("Network key %s\n", net_key_str);
-}
-
-//callback function for provisioning reset
-static void prov_reset(void)
-{
-	bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);
-	node_addr = BT_MESH_ADDR_UNASSIGNED;
-	provisioner_addr =  BT_MESH_ADDR_UNASSIGNED;
-	is_prov_complete = false;
-	mesh_start();
+	is_prov_complete=true;
 }
 
 static const struct bt_mesh_prov prov = {
 	.uuid = dev_uuid,
 	.complete = prov_complete,
-	.reset = prov_reset,
 };
 
 static int bt_ready(void)
@@ -174,17 +159,20 @@ static int bt_ready(void)
 	printk("Device Name: %s \n", name);
 	printk("Bluetooth initialized\n");
 	printk("Mesh initialized\n");
-	show_main();
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		settings_load();
 	}
 
-	/* Enable Advertising as unprovisioned beacon */
-	bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);
-	printk("Advertising enabled\n");
-	board_show_text("Advertising enabled\n" ,false, K_SECONDS(5) );
+	if(!is_prov_complete)
+	{
+		/* Enable Advertising as unprovisioned beacon */
+		bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);
+		printk("Advertising enabled\n");
+		board_show_text("Advertising enabled\n" ,false, K_SECONDS(5) );
+	}
+	else
+		node_addr = elements[0].addr;
 	show_main();
-
 	return 0;
 }
 
@@ -192,7 +180,11 @@ static int bt_ready(void)
 void mesh_start(void)
 {
 	int err;
-	
+	node_addr = BT_MESH_ADDR_UNASSIGNED;
+	provisioner_addr =  BT_MESH_ADDR_UNASSIGNED;
+	is_prov_complete = false;
+	is_message_recieved_from_prov=false;
+
 	/* Initialize the Bluetooth Subsystem */
 	err = bt_enable(NULL);
 	bt_ready();
@@ -201,12 +193,12 @@ void mesh_start(void)
 
 bool mesh_is_initialized(void)
 {
-	return node_addr!= BT_MESH_ADDR_UNASSIGNED;
+	return elements[0].addr != BT_MESH_ADDR_UNASSIGNED;
 }
 
 bool mesh_is_prov_complete(void)
 {
-	return is_prov_complete;
+	return is_message_recieved_from_prov;
 }
 
 uint16_t get_my_addr(void)
@@ -222,15 +214,4 @@ uint16_t get_prov_addr(void)
 const uint8_t * get_uuid(void)
 {
 	return dev_uuid;
-}
-
-
-uint8_t * get_net_key(void)
-{
-	return network_key;
-}
-
-char * get_app_key(void)
-{
-	return application_key;
 }

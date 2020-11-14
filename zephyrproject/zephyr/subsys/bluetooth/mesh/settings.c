@@ -1043,7 +1043,7 @@ static int mesh_commit(void)
 	}
 
 	atomic_set_bit(bt_mesh.flags, BT_MESH_VALID);
-	bt_mesh_start(NULL);
+	bt_mesh_start();
 
 	return 0;
 }

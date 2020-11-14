@@ -13,6 +13,13 @@ enum periph_device {
 	DEV_IDX_NUMOF,
 };
 
+enum font_size {
+	FONT_SMALL = 0,
+	FONT_MEDIUM = 1,
+	FONT_BIG = 2,
+};
+
+
 void board_refresh_display(void);
 size_t first_name_len(const char *name);
 void show_sensors_data(k_timeout_t interval);

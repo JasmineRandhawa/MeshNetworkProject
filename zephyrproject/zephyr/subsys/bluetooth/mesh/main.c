@@ -132,7 +132,7 @@ int bt_mesh_provision(const uint8_t net_key[16], uint16_t net_idx,
 		bt_mesh_lpn_group_add(BT_MESH_ADDR_ALL_NODES);
 	}
 
-	bt_mesh_start(net_key);
+	bt_mesh_start();
 
 	return 0;
 }
@@ -342,7 +342,7 @@ static void model_start(struct bt_mesh_model *mod, struct bt_mesh_elem *elem,
 	}
 }
 
-int bt_mesh_start(const uint8_t net_key[16])
+int bt_mesh_start(void)
 {
 	if (bt_mesh_beacon_get() == BT_MESH_BEACON_ENABLED) {
 		bt_mesh_beacon_enable();
@@ -370,7 +370,7 @@ int bt_mesh_start(const uint8_t net_key[16])
 		struct bt_mesh_subnet *sub = bt_mesh_subnet_next(NULL);
 		uint16_t addr = bt_mesh_primary_addr();
 
-		bt_mesh_prov_complete(sub->net_idx, addr,net_key);
+		bt_mesh_prov_complete(sub->net_idx, addr);
 	}
 
 	bt_mesh_model_foreach(model_start, NULL);

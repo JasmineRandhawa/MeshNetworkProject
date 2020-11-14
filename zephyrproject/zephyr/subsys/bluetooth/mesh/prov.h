@@ -140,7 +140,7 @@ int bt_mesh_pb_gatt_recv(struct bt_conn *conn, struct net_buf_simple *buf);
 
 const struct bt_mesh_prov *bt_mesh_prov_get(void);
 
-void bt_mesh_prov_complete(uint16_t net_idx, uint16_t addr,const uint8_t net_key[16]);
+void bt_mesh_prov_complete(uint16_t net_idx, uint16_t addr);
 void bt_mesh_prov_reset(void);
 
 const struct prov_bearer_cb *bt_mesh_prov_bearer_cb_get(void);
