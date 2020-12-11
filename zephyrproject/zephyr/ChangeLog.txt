@@ -1,0 +1,18 @@
+Changes compared to previous zephyr version
+
+Added below folder 
+"/zephyr/project"
+
+Modified below files in "/zephyr/include/bluetooth/mesh" folder
+access.h
+
+Modified below files in "/zephyr/subsys/bluetooth/mesh" folder
+access.c
+access.h
+cfg_cli.c
+cfg_srv.c
+health_cli.c
+health_srv.c
+net.c
+transport.c
+transport.h
