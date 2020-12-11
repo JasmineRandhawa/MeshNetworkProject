@@ -82,6 +82,16 @@
 #endif
 
 /**
+ * @def OPENTHREAD_CONFIG_MAC_SOFTWARE_CSMA_BACKOFF_ENABLE
+ *
+ * Define to 1 if you want to enable software CSMA-CA backoff logic.
+ *
+ */
+#ifdef CONFIG_OPENTHREAD_MAC_SOFTWARE_CSMA_BACKOFF_ENABLE
+#define OPENTHREAD_CONFIG_MAC_SOFTWARE_CSMA_BACKOFF_ENABLE 1
+#endif
+
+/**
  * @def OPENTHREAD_CONFIG_PLATFORM_USEC_TIMER_ENABLE
  *
  * Define to 1 if you want to enable microsecond backoff timer implemented
@@ -121,6 +131,16 @@
  *
  */
 #define RADIO_CONFIG_SRC_MATCH_SHORT_ENTRY_NUM 0
+
+/**
+ * @def OPENTHREAD_CONFIG_PLATFORM_INFO
+ *
+ * The platform-specific string to insert into the OpenThread version string.
+ *
+ */
+#ifdef CONFIG_OPENTHREAD_CONFIG_PLATFORM_INFO
+#define OPENTHREAD_CONFIG_PLATFORM_INFO CONFIG_OPENTHREAD_CONFIG_PLATFORM_INFO
+#endif /* CONFIG_OPENTHREAD_CONFIG_PLATFORM_INFO */
 
 /**
  * @def OPENTHREAD_CONFIG_MLE_MAX_CHILDREN

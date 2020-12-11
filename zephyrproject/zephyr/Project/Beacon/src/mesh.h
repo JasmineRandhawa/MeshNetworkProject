@@ -1,47 +1,20 @@
-/*
- * Copyright (c) 2018 Intel Corporation
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+#define MOD_LF            0x0000
+#define APP_IDX           0x000
+#define DEFAULT_TTL       31
+#define MSG_MAX_LEN       12
+#define OP_MSG        	  0xbb
+#define OP_VND_MSG        BT_MESH_MODEL_OP_3(OP_MSG, BT_COMP_ID_LF)
 
-#define STATE_OFF	0x00
-#define STATE_ON	0x01
-#define STATE_DEFAULT	0x01
-#define STATE_RESTORE	0x02
+/* get functions */
+const uint8_t * get_my_device_uuid(void);
+uint16_t get_my_address(void);
+uint16_t get_provisioner_address(void);
+char * get_my_device_name(void);
+char * get_provisioner_device_name(void);
 
-/* Model Operation Codes */
-#define BT_MESH_MODEL_OP_GEN_ONOFF_GET		BT_MESH_MODEL_OP_2(0x82, 0x01)
-#define BT_MESH_MODEL_OP_GEN_ONOFF_SET		BT_MESH_MODEL_OP_2(0x82, 0x02)
-#define BT_MESH_MODEL_OP_GEN_ONOFF_SET_UNACK	BT_MESH_MODEL_OP_2(0x82, 0x03)
-#define BT_MESH_MODEL_OP_GEN_ONOFF_STATUS	BT_MESH_MODEL_OP_2(0x82, 0x04)
+void send_message(uint16_t to_address, const char * message_str);
 
-#define BT_MESH_MODEL_OP_SENS_DESC_GET		BT_MESH_MODEL_OP_2(0x82, 0x30)
-#define BT_MESH_MODEL_OP_SENS_GET		BT_MESH_MODEL_OP_2(0x82, 0x31)
-#define BT_MESH_MODEL_OP_SENS_COL_GET		BT_MESH_MODEL_OP_2(0x82, 0x32)
-#define BT_MESH_MODEL_OP_SENS_SERIES_GET	BT_MESH_MODEL_OP_2(0x82, 0x33)
-
-#define BT_MESH_MODEL_OP_SENS_DESC_STATUS	BT_MESH_MODEL_OP_1(0x51)
-#define BT_MESH_MODEL_OP_SENS_STATUS		BT_MESH_MODEL_OP_1(0x52)
-
-struct led_onoff_state {
-	uint8_t current;
-	uint8_t previous;
-	uint8_t dev_id;
-
-	uint8_t last_tid;
-	uint16_t last_tx_addr;
-	int64_t last_msg_timestamp;
-};
-
-void send_hello(uint16_t prov_addr);
-
-uint16_t get_my_addr(void);
-uint16_t get_prov_addr(void);
-
-const uint8_t * get_uuid(void);
-
+/* mesh functions */
 bool mesh_is_initialized(void);
 bool mesh_is_prov_complete(void);
-
 void mesh_start(void);
-int mesh_init(void);

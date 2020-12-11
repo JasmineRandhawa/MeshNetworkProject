@@ -37,6 +37,7 @@
 #include "beacon.h"
 #include "settings.h"
 #include "prov.h"
+#include "cfg.h"
 
 /* Minimum valid Mesh Network PDU length. The Network headers
  * themselves take up 9 bytes. After that there is a minimum of 1 byte
@@ -343,7 +344,7 @@ static void bt_mesh_net_local(struct k_work *work)
 		BT_DBG("src: 0x%04x dst: 0x%04x seq 0x%06x sub %p", rx.ctx.addr,
 		       rx.ctx.addr, rx.seq, sub);
 
-		(void) bt_mesh_trans_recv(&buf->b, &rx, rx.ctx.recv_rssi);
+		(void) bt_mesh_trans_recv(&buf->b, &rx,0);
 		net_buf_unref(buf);
 	}
 }
@@ -455,10 +456,6 @@ int bt_mesh_net_send(struct bt_mesh_net_tx *tx, struct net_buf *buf,
 	       net_buf_tailroom(buf));
 	BT_DBG("Payload len %u: %s", buf->len, bt_hex(buf->data, buf->len));
 	BT_DBG("Seq 0x%06x", bt_mesh.seq);
-
-	if (tx->ctx->send_ttl == BT_MESH_TTL_DEFAULT) {
-		tx->ctx->send_ttl = bt_mesh_default_ttl_get();
-	}
 
 	cred = net_tx_cred_get(tx);
 	err = net_header_encode(tx, cred->nid, &buf->b);
@@ -787,7 +784,7 @@ void bt_mesh_net_recv(struct net_buf_simple *data, int8_t rssi,
 	 * credentials. Remove it from the message cache so that we accept
 	 * it again in the future.
 	 */
-	if (bt_mesh_trans_recv(&buf, &rx, rssi) == -EAGAIN) {
+	if (bt_mesh_trans_recv(&buf, &rx,rssi) == -EAGAIN) {
 		BT_WARN("Removing rejected message from Network Message Cache");
 		msg_cache[rx.msg_cache_idx].src = BT_MESH_ADDR_UNASSIGNED;
 		/* Rewind the next index now that we're not using this entry */

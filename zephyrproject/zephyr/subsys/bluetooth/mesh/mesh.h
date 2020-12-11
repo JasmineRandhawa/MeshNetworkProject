@@ -42,4 +42,4 @@ struct bt_mesh_app_key_cb {
 
 struct bt_mesh_net;
 
-int bt_mesh_start();
+int bt_mesh_start(void);

@@ -71,6 +71,24 @@ set(__build_dir ${CMAKE_CURRENT_BINARY_DIR}/zephyr)
 
 set(PROJECT_BINARY_DIR ${__build_dir})
 
+if(${CMAKE_VERSION} VERSION_EQUAL 3.19.0 OR
+   ${CMAKE_VERSION} VERSION_EQUAL 3.19.1)
+  message(WARNING "CMake 3.19.0/3.19.1 contains a bug regarding Toolchain/compiler "
+          "testing. Consider switching to a different CMake version.\n"
+          "See more here: \n"
+          "- https://github.com/zephyrproject-rtos/zephyr/issues/30232\n"
+          "- https://gitlab.kitware.com/cmake/cmake/-/issues/21497")
+  # This is a workaround for #30232.
+  # During Zephyr CMake invocation a plain C compiler is used for DTS.
+  # This results in the internal `CheckCompilerFlag.cmake` being included by CMake
+  # Later, when the full toolchain is configured, then `CMakeCheckCompilerFlag.cmake` is included.
+  # This overloads the `cmake_check_compiler_flag()` function, thus causing #30232.
+  # By manualy loading `CMakeCheckCompilerFlag.cmake` then `CheckCompilerFlag.cmake` will overload
+  # the functions (and thus win the battle), and because `include_guard(GLOBAL)` is used in
+  # `CMakeCheckCompilerFlag.cmake` this file will not be re-included later.
+  include(${CMAKE_ROOT}/Modules/Internal/CMakeCheckCompilerFlag.cmake)
+endif()
+
 message(STATUS "Application: ${APPLICATION_SOURCE_DIR}")
 
 add_custom_target(code_data_relocation_target)
@@ -380,6 +398,17 @@ foreach(root ${BOARD_ROOT})
       list(GET shields_refs_list ${_idx} s_path)
       get_filename_component(s_dir ${s_path} DIRECTORY)
 
+      # if shield config flag is on, add shield overlay to the shield overlays
+      # list and dts_fixup file to the shield fixup file
+      list(APPEND
+        shield_dts_files
+        ${shield_dir}/${s_path}
+        )
+      list(APPEND
+        shield_dts_fixups
+        ${shield_dir}/${s_dir}/dts_fixup.h
+        )
+
       # search for shield/boards/board.overlay file
       if(EXISTS ${shield_dir}/${s_dir}/boards/${BOARD}.overlay)
         # add shield/board overlay to the shield overlays list
@@ -397,17 +426,6 @@ foreach(root ${BOARD_ROOT})
           ${shield_dir}/${s_dir}/boards/${s}/${BOARD}.overlay
           )
       endif()
-
-      # if shield config flag is on, add shield overlay to the shield overlays
-      # list and dts_fixup file to the shield fixup file
-      list(APPEND
-        shield_dts_files
-        ${shield_dir}/${s_path}
-        )
-      list(APPEND
-        shield_dts_fixups
-        ${shield_dir}/${s_dir}/dts_fixup.h
-        )
 
       # search for shield/shield.conf file
       if(EXISTS ${shield_dir}/${s_dir}/${s}.conf)

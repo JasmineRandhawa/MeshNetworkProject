@@ -1,17 +1,22 @@
-/*
- * Copyright (c) 2018 Phytec Messtechnik GmbH
- * Copyright (c) 2018 Intel Corporation
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+#define STAT_COUNT 10
 
-enum periph_device {
-	DEV_IDX_HDC1010 = 0,
-	DEV_IDX_MMA8652,
-	DEV_IDX_APDS9960,
-	DEV_IDX_EPD,
-	DEV_IDX_NUMOF,
-};
+#if defined(CONFIG_SSD16XX)
+#define DISPLAY_DRIVER "SSD16XX"
+#else
+#error Unsupported board
+#endif
+
+#if defined(CONFIG_SSD16XX)
+#define DISPLAY_DRIVER "SSD16XX"
+#endif
+
+#if defined(CONFIG_SSD1306)
+#define DISPLAY_DRIVER "SSD1306"
+#endif
+
+#ifndef DISPLAY_DRIVER
+#define DISPLAY_DRIVER "DISPLAY"
+#endif
 
 enum font_size {
 	FONT_SMALL = 0,
@@ -19,16 +24,14 @@ enum font_size {
 	FONT_BIG = 2,
 };
 
-
-void board_refresh_display(void);
-size_t first_name_len(const char *name);
-void show_sensors_data(k_timeout_t interval);
 void show_main(void);
-void board_show_text(const char *text, bool center, k_timeout_t duration);
+
+/*board functions */
+void board_show_text(const char *text, bool center);
+void board_add_node_and_neighbours_data(uint16_t from_address, char * message_str , double distance, int16_t rssi);
+void board_init(void);
 void board_blink_leds(void);
-int get_hdc1010_val(struct sensor_value *val);
-int get_mma8652_val(struct sensor_value *val);
-int get_apds9960_val(struct sensor_value *val);
-int set_led_state(uint8_t id, bool state);
-int periphs_init(void);
-int board_init(void);
+
+/* sensor functions */
+unsigned int get_temperature(void);
+int get_humidity(void);

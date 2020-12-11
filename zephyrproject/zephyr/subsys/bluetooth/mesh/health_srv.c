@@ -262,7 +262,7 @@ static void attention_set(struct bt_mesh_model *model,
 {
 	BT_DBG("");
 
-	attention_set_unrel(model, ctx, buf,0);
+	attention_set_unrel(model, ctx, buf,rssi);
 
 	send_attention_status(model, ctx);
 }
@@ -314,7 +314,7 @@ static void health_period_set(struct bt_mesh_model *model,
 {
 	BT_DBG("");
 
-	health_period_set_unrel(model, ctx, buf,0);
+	health_period_set_unrel(model, ctx, buf,rssi);
 
 	send_health_period_status(model, ctx);
 }

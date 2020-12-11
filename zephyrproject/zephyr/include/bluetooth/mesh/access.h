@@ -190,7 +190,7 @@ struct bt_mesh_model_op {
 	 */
 	void (*const func)(struct bt_mesh_model *model,
 			   struct bt_mesh_msg_ctx *ctx,
-			   struct net_buf_simple *buf, int8_t rssi);
+			   struct net_buf_simple *buf,int8_t rssi);
 };
 
 #define BT_MESH_MODEL_OP_1(b0) (b0)

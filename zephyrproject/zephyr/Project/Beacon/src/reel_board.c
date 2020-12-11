@@ -1,465 +1,557 @@
 #include <zephyr.h>
+#include <device.h>
 
+#include <display/cfb.h>
+#include <drivers/flash.h>
+#include <storage/flash_map.h>
+#include <drivers/gpio.h>
+#include <drivers/sensor.h>
+
+#include <sys/printk.h>
 #include <string.h>
 #include <stdio.h>
-#include <sys/printk.h>
-
-#include <device.h>
-#include <display/cfb.h>
-#include <drivers/gpio.h>
-#include <drivers/flash.h>
-#include <drivers/sensor.h>
-#include <storage/flash_map.h>
+#include <stdlib.h>
+#include <math.h>
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/mesh/access.h>
-#include <bluetooth/hci.h>
 
 #include "mesh.h"
 #include "board.h"
 
-
-enum screen_ids {
-	SCREEN_MAIN = 0,
-	SCREEN_SENSORS = 1,
-	SCREEN_LAST,
-};
+static uint32_t record_count;
+struct k_delayed_work led_timer;
+static const struct device *epd_dev;
 
 struct font_info {
 	uint8_t columns;
 } fonts[] = {
-	[FONT_BIG] =    { .columns = 12 },
-	[FONT_MEDIUM] = { .columns = 16 },
-	[FONT_SMALL] =  { .columns = 25 },
+	[FONT_BIG] = { .columns = 12 },
+	[FONT_MEDIUM] = { .columns = 14 },
+	[FONT_SMALL] = { .columns = 26 },
 };
 
-#define LONG_PRESS_TIMEOUT K_SECONDS(1)
-
-static const struct device *epd_dev;
-static bool pressed;
-static uint8_t screen_id = SCREEN_MAIN;
-static const struct device *gpio;
-static struct k_delayed_work epd_work;
-static struct k_delayed_work long_press_work;
-static char str_buf[256];
+/* declare stat list that contains all the mesh information */
+static struct stat
+{
+	uint16_t addr;
+	char name[3];
+	int temperature;
+	int humidity;
+	uint16_t neighbour_addr;
+	char neighbour_name[4];
+	int neighbour_temperature;
+	int neighbour_humidity;
+	int8_t rssi;
+	int8_t distance;
+} node_info[STAT_COUNT] = {
+	[0 ...(STAT_COUNT - 1)] = {},
+};
 
 static struct {
 	const struct device *dev;
 	const char *name;
 	gpio_pin_t pin;
 	gpio_flags_t flags;
-} leds[] = {
-	{ .name = DT_GPIO_LABEL(DT_ALIAS(led0), gpios),
-	  .pin = DT_GPIO_PIN(DT_ALIAS(led0), gpios),
-	  .flags = DT_GPIO_FLAGS(DT_ALIAS(led0), gpios)},
-	{ .name = DT_GPIO_LABEL(DT_ALIAS(led1), gpios),
-	  .pin = DT_GPIO_PIN(DT_ALIAS(led1), gpios),
-	  .flags = DT_GPIO_FLAGS(DT_ALIAS(led1), gpios)},
-	{ .name = DT_GPIO_LABEL(DT_ALIAS(led2), gpios),
-	  .pin = DT_GPIO_PIN(DT_ALIAS(led2), gpios),
-	  .flags = DT_GPIO_FLAGS(DT_ALIAS(led2), gpios)}
-};
+} leds[] = { { .name = DT_GPIO_LABEL(DT_ALIAS(led0), gpios),
+	       .pin = DT_GPIO_PIN(DT_ALIAS(led0), gpios),
+	       .flags = DT_GPIO_FLAGS(DT_ALIAS(led0), gpios) },
+	     { .name = DT_GPIO_LABEL(DT_ALIAS(led1), gpios),
+	       .pin = DT_GPIO_PIN(DT_ALIAS(led1), gpios),
+	       .flags = DT_GPIO_FLAGS(DT_ALIAS(led1), gpios) },
+	     { .name = DT_GPIO_LABEL(DT_ALIAS(led2), gpios),
+	       .pin = DT_GPIO_PIN(DT_ALIAS(led2), gpios),
+	       .flags = DT_GPIO_FLAGS(DT_ALIAS(led2), gpios) } };
 
-struct k_delayed_work led_timer;
-
-size_t first_name_len(const char *name)
-{
-	size_t len;
-
-	for (len = 0; *name; name++, len++) {
-		switch (*name) {
-		case ' ':
-		case ',':
-		case '\n':
-			return len;
-		}
-	}
-
-	return len;
-}
-
+/* print line */
 static size_t print_line(enum font_size font_size, int row, const char *text,
-			 size_t len, bool center)
+						 size_t len, bool center)
 {
 	uint8_t font_height, font_width;
 	uint8_t line[fonts[FONT_SMALL].columns + 1];
 	int pad;
-
+	epd_dev = device_get_binding(DISPLAY_DRIVER);
 	cfb_framebuffer_set_font(epd_dev, font_size);
 
 	len = MIN(len, fonts[font_size].columns);
 	memcpy(line, text, len);
 	line[len] = '\0';
 
-	if (center) {
+	if (center)
 		pad = (fonts[font_size].columns - len) / 2U;
-	} else {
+	else
 		pad = 0;
-	}
-
 	cfb_get_font_size(epd_dev, font_size, &font_width, &font_height);
-
-	if (cfb_print(epd_dev, line, font_width * pad, font_height * row)) {
-		printk("Failed to print a string\n");
-	}
-
+	cfb_print(epd_dev, line, font_width * pad, font_height * row);
 	return len;
 }
 
-static size_t get_len(enum font_size font, const char *text)
+/* get humidity sensor value from "ti_hdc" sample */
+int get_humidity(void)
 {
-	const char *space = NULL;
-	size_t i;
+	const struct device *dev;
+	struct sensor_value humidity;
 
-	for (i = 0; i <= fonts[font].columns; i++) {
-		switch (text[i]) {
-		case '\n':
-		case '\0':
-			return i;
-		case ' ':
-			space = &text[i];
-			break;
-		default:
-			continue;
+	dev = device_get_binding(DT_LABEL(DT_INST(0, ti_hdc)));
+	sensor_sample_fetch(dev);
+	sensor_channel_get(dev, SENSOR_CHAN_HUMIDITY, &humidity);
+
+	int humidity_value = (int)humidity.val1;
+	return humidity_value;
+}
+
+
+/* get temperature sensor value from "ti_hdc" sample */
+unsigned int get_temperature(void)
+{
+	const struct device *dev;
+	struct sensor_value temp;
+
+	dev = device_get_binding(DT_LABEL(DT_INST(0, ti_hdc)));
+	sensor_sample_fetch(dev);
+	sensor_channel_get(dev, SENSOR_CHAN_AMBIENT_TEMP, &temp);
+
+	int temperature_value = (int)temp.val1;
+	if (temperature_value < 0)
+		temperature_value = 0;
+	return temperature_value;
+}
+
+/* Display main screen info */
+void show_main()
+{
+	char str[100];
+	int len, line = 0;
+	epd_dev = device_get_binding(DISPLAY_DRIVER);
+	cfb_framebuffer_clear(epd_dev, true);
+
+	// if node is not provisioned 
+	if (!mesh_is_initialized() || !mesh_is_prov_complete())
+	{
+		len = snprintf(str, sizeof(str), "Mesh Info :\n");
+		print_line(FONT_SMALL, line++, str, len, true);
+
+		len = snprintf(str, sizeof(str), "Name : Unassigned\n");
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		char device_uuid_str[8+1];
+		bin2hex(get_my_device_uuid() , 2 , device_uuid_str, sizeof(device_uuid_str));
+		len = snprintf(str, sizeof(str), "UUID : %s", device_uuid_str);
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		len = snprintf(str, sizeof(str), "Address : %s", "Unassigned");
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		len = snprintf(str, sizeof(str), "Status : Advertising\n");
+		print_line(FONT_SMALL, line++, str, len, false);
+	}
+	// if node is provisioned 
+	else if (mesh_is_initialized() && mesh_is_prov_complete())
+	{
+
+		len = snprintf(str, sizeof(str), "Mesh Info :\n");
+		print_line(FONT_SMALL, line++, str, len, true);
+
+		len = snprintf(str, sizeof(str), "Name : %s", get_my_device_name());
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		char device_uuid_str[8+1];
+		bin2hex(get_my_device_uuid() , 2 , device_uuid_str, sizeof(device_uuid_str));
+		len = snprintf(str, sizeof(str), "UUID : %s", device_uuid_str);
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		len = snprintf(str, sizeof(str), "Address : 0x%04x\n", get_my_address());
+		print_line(FONT_SMALL, line++, str, len, false);
+
+		len = snprintf(str, sizeof(str), "Status : Provisioned\n");
+		print_line(FONT_SMALL, line++, str, len, false);
+	}
+	
+	len = snprintf(str, sizeof(str), "Temperature : %d C \n", get_temperature());
+	print_line(FONT_SMALL, line++, str, len, false);
+
+	len = snprintf(str, sizeof(str), "Humidity : %d%%\n",get_humidity());
+	print_line(FONT_SMALL, line++, str, len, false);
+
+	cfb_framebuffer_finalize(epd_dev);
+}
+
+/* return node_info list record count */
+static int get_node_info_list_record_count()
+{
+	return record_count;
+}
+
+/* print node_info list info on the board */
+void show_node_status()
+{
+	char str[100];
+	int len, line = 0;
+	epd_dev = device_get_binding(DISPLAY_DRIVER);
+	cfb_framebuffer_clear(epd_dev, true);
+
+	 // print my info
+	len = snprintf(str, sizeof(str), "Node :%s: 0x%04x :%dC %d%% \n",
+									 get_my_device_name(), get_my_address(), get_temperature(), get_humidity());
+	print_line(FONT_SMALL, line++, str, len, true);
+
+	// print my neighbours info
+	len = snprintf(str, sizeof(str), "%s", "My Neighbours: \n");
+	print_line(FONT_SMALL, line++, str, len, true);
+
+	for (int i = 0; i < get_node_info_list_record_count(); i++)
+	{
+		struct stat *stat = &node_info[i];
+		if (stat->addr != BT_MESH_ADDR_UNASSIGNED)
+		{
+			if (stat->addr == get_my_address())
+			{
+				char temp_hum[50];
+				if (stat->neighbour_temperature >= 0 && stat->neighbour_humidity >= 0)
+					snprintf(temp_hum, 50, "%dC %d%%", stat->neighbour_temperature, stat->neighbour_humidity);
+				else
+					snprintf(temp_hum, 20, "%s", "");
+				int8_t round_result = (int8_t) round(stat->distance); 
+				len = snprintf(str, sizeof(str), "%s:0x%04x %dm %d %s\n",
+								   stat->neighbour_name, stat->neighbour_addr, round_result,stat->rssi,
+								    temp_hum);
+				print_line(FONT_SMALL, line++, str, len, false);
+			}
 		}
 	}
 
-	/* If we got more characters than fits a line, and a space was
-	 * encountered, fall back to the last space.
-	 */
-	if (space) {
-		return space - text;
-	}
+	// print neighbours neighbours Info
+	if(get_node_info_list_record_count() > 1)
+	{
+		len = snprintf(str, sizeof(str), "%s", "-----------------------\n");
+		print_line(FONT_SMALL, line++, str, len, false);
 
-	return fonts[font].columns;
+		len = snprintf(str, sizeof(str), "%s", "Among Neighbours: \n");
+		print_line(FONT_SMALL, line++, str, len, true);
+	
+		for (int i = 0; i < get_node_info_list_record_count(); i++)
+		{
+			struct stat *stat = &node_info[i];
+			if (stat->addr != BT_MESH_ADDR_UNASSIGNED)
+			{
+				if (stat->addr != get_my_address())
+				{
+					int8_t round_result =  (int8_t) round(stat->distance); 
+					len = snprintf(str, sizeof(str), "%s:0x%04x %s:0x%04x %dm\n",
+								stat->name, stat->addr,
+								stat->neighbour_name, stat->neighbour_addr, round_result);
+					print_line(FONT_SMALL, line++, str, len, false);
+				}
+			}
+		}
+	}
+	cfb_framebuffer_finalize(epd_dev);
 }
 
+/* check if record already exists in node_info list */
+static bool check_if_record_exists(uint16_t address_hex)
+{
+	if(address_hex != BT_MESH_ADDR_UNASSIGNED && address_hex != get_my_address())
+	{
+		int is_record_exists = 0;
+		for (int i = 0; i <  get_node_info_list_record_count(); i++)
+		{
+			struct stat *stat = &node_info[i];
+			if (stat->addr == get_my_address())
+			{
+				if (stat->neighbour_addr == address_hex)
+				{
+					is_record_exists = 1;
+					return is_record_exists;
+				}
+			}
+		}
+		return is_record_exists;
+	}
+	else
+		return 1;
+}
+
+/* check if  neighbour record already exists in node_info list */
+static bool check_if_record_neighbour_exists(uint16_t ctx_addr, uint16_t address_hex)
+{
+	int is_record_exists = 0;
+	for (int i = 0; i <  get_node_info_list_record_count(); i++)
+	{
+		struct stat *stat = &node_info[i];
+		if (address_hex != get_my_address() && ((stat->addr == ctx_addr && stat->neighbour_addr == address_hex) ||
+											 (stat->neighbour_addr == ctx_addr && stat->addr == address_hex)))
+		{
+			is_record_exists = 1;
+			return is_record_exists;
+		}
+	}
+	return is_record_exists;
+}
+
+
+void board_add_node_and_neighbours_data(uint16_t from_address, char * message_str, double distance, int16_t rssi)
+{
+	// if message is of type "Provisioning Message" with message code as Q , 
+	// then add record of node and provisioner as node's neigbour in node_info list
+	if (strstr(message_str, "Q") != NULL) 
+	{
+		record_count = 0;
+		struct stat *self_stat = &node_info[record_count];
+		snprintf(self_stat->name, 3, "%s", get_my_device_name());
+		char msg_str[20];
+		snprintf(msg_str, 20, "%s", message_str);
+		char *msg_token = strtok(msg_str, "=");
+		msg_token = strtok(NULL, "=");
+		snprintf(self_stat->neighbour_name, 4, "%s", get_provisioner_device_name());
+		self_stat->addr = get_my_address();
+		self_stat->humidity = get_humidity();
+		self_stat->temperature = get_temperature();
+		self_stat->neighbour_addr = from_address;
+		self_stat->rssi = rssi;
+		self_stat->distance = distance;
+		record_count++;
+	}
+
+	//if message is of type "Neighbours Info Message" with message code as R , 
+	// then add the record for node and extracted address as node's neigbour in node_info list
+	if (strstr(message_str, "R") != NULL) 
+	{
+		char msg_str[20];
+		snprintf(msg_str, 20, "%s", message_str);
+		char *address_name_token;
+		char address_str[7];
+		address_name_token = strtok(msg_str, "=");
+		address_name_token = strtok(NULL, "=");
+		snprintf(address_str,7,"0X000%s",address_name_token);
+		uint16_t address_hex = (uint16_t)strtol(address_str, NULL, 0);
+		int is_record_exists = check_if_record_exists(address_hex);
+		
+		if (is_record_exists == 0)
+		{
+			struct stat *self_stat = &node_info[record_count];
+			self_stat->addr = get_my_address();
+			snprintf(self_stat->name, 3, "%s", get_my_device_name());
+			self_stat->distance = self_stat->distance ;
+			self_stat->humidity = get_humidity();
+			self_stat->temperature = get_temperature();
+			self_stat->addr = get_my_address();
+			self_stat->rssi = self_stat->rssi ;
+			self_stat->neighbour_addr = address_hex;
+			address_name_token = strtok(NULL, "=");
+			snprintf(self_stat->neighbour_name, 4, "%s", address_name_token);
+			record_count++;
+		}
+	}
+
+	// update distance and rssi value in node_info list with respect to neighbour with address as from_address
+	for (int i = 0; i <  get_node_info_list_record_count(); i++)
+	{
+		struct stat *stat = &node_info[i];
+		if (stat->addr == get_my_address())
+		{
+			if (stat->neighbour_addr == from_address)
+			{
+				stat->distance = distance;
+				stat->rssi = rssi;
+			}
+		}
+	}
+
+	//if message is of type "Sensor Info Message" with message code as S, 
+	// then save sensor info of neighbor with address as from_address
+	if(strstr(message_str,"S")!=NULL) 
+	{
+		for (int i = 0; i <  get_node_info_list_record_count(); i++)
+		{
+			struct stat *stat = &node_info[i];
+			if (stat->addr == get_my_address())
+			{
+				if (stat->neighbour_addr == from_address)
+				{
+					char msg_str[50];
+					snprintf(msg_str, 50, "%s", message_str);
+					char *msg_token;
+					msg_token = strtok(msg_str, "=");
+					msg_token = strtok(NULL, "=");
+					snprintk(stat->neighbour_name, 4, "%s", msg_token);
+					msg_token = strtok(NULL, "=");
+					stat->neighbour_temperature = atoi(msg_token);
+					msg_token = strtok(NULL, "=");
+					stat->neighbour_humidity= atoi(msg_token);
+					stat->rssi = rssi;
+					stat->distance = distance;
+				}
+			}
+		}
+	}
+
+	//if message is of type "Neighbours Neighbours Message" with message code as T, 
+	// then add a recors of it in node_info list
+	if(strstr(message_str,"T")!=NULL)
+	{
+		char msg_str[20];
+		snprintf(msg_str, 20, "%s", message_str);
+		char *address_name_token;
+		char address_str[7];
+		address_name_token = strtok(msg_str, "=");
+		address_name_token = strtok(NULL, "=");
+		snprintf(address_str,7,"0X000%s",address_name_token);
+		uint16_t address_hex = (uint16_t)strtol(address_str, NULL, 0);
+		int is_record_exists = check_if_record_neighbour_exists(from_address,address_hex);
+		
+		if (is_record_exists==0) 
+		{
+			struct stat *stat = &node_info[record_count];
+			stat->addr = from_address;
+			stat->neighbour_addr = address_hex;
+			address_name_token = strtok(NULL, "=");
+			snprintf(stat->neighbour_name, 4, "%s", address_name_token);
+			record_count++;
+		}	
+	}
+
+	//if message is of type "Neighbours Neighbours Update Info Message" with message code as U, 
+	// update received info to corresponding neighbor neighbour record in node_info list
+	if(strstr(message_str,"U")!=NULL)
+	{
+		char msg_str[20];
+		snprintf(msg_str, 20, "%s", message_str);
+		char *address_name_token;
+		char address_str[7];
+		address_name_token = strtok(msg_str, "=");
+		address_name_token = strtok(NULL, "=");
+		snprintf(address_str,7,"0X000%s",address_name_token);
+		uint16_t address_hex = (uint16_t)strtol(address_str, NULL, 0);
+		int is_record_exists = check_if_record_neighbour_exists(from_address, address_hex);
+		if (is_record_exists == 1)
+		{
+			for (int i = 0; i <  get_node_info_list_record_count(); i++)
+			{
+				struct stat *stat = &node_info[i];
+				if(stat->addr == from_address && stat->addr  != get_my_address() &&  stat->neighbour_addr == address_hex)
+				{
+					address_name_token = strtok(NULL, "=");
+					int8_t round_value = atoi(address_name_token);
+					stat->distance = round_value ;
+					address_name_token = strtok(NULL, "=");
+					snprintf(stat->name, 3, "%s", address_name_token);
+				}
+			}
+		}
+	}
+	
+	// send sensor Info , Neighbours Neighbours Info  stores in node_info list to all my neighbours
+	for (int i = 0; i < get_node_info_list_record_count() ; i++) 
+	{
+		struct stat *stat = &node_info[i];
+		if(stat->addr == get_my_address())
+		{
+			char sensor_info_message[12];
+			snprintf(sensor_info_message, 12, "S=%s=%d=%d", get_my_device_name(),get_temperature(), get_humidity());
+			send_message(stat->neighbour_addr, sensor_info_message);	
+
+			if(stat->neighbour_addr != from_address)
+			{
+				char addr_string[8];
+				snprintf(addr_string,8,"0x%04x",stat->neighbour_addr);
+				char c = addr_string[strlen(addr_string) -1];
+
+				char neighbour_addr_name_msg[10];
+				snprintf(neighbour_addr_name_msg,10,"T=%c=%s",c,stat->neighbour_name);						
+				send_message(from_address,neighbour_addr_name_msg);
+								
+				char neighbour_addr_dist_message[17],dev_name[4];
+				snprintf(dev_name, 4, "%s",get_my_device_name());
+				int8_t round_result = (int8_t) round(stat->distance); 
+				snprintf(neighbour_addr_dist_message, 17, "U=%c=%d=%s", c,round_result,dev_name);
+				send_message(from_address,neighbour_addr_dist_message);	
+			}	
+		}
+			
+	}
+
+	// print all reciors of node_info list on serial log 
+	printk ("Record No. : Node_Address Node_Name  Node_Temperature  Node_Humidity Neighbour_Address Neighbour_Name Neighbour_Temperature Neighbour_Humidity Distance Rssi\n ");
+	for (int i = 0; i < get_node_info_list_record_count() ; i++) {
+	struct stat *stat = &node_info[i];
+	printk ("Record %d : 0x%04x %s %dC %d%%    0x%04x %s %dC %d%%    %dm %d\n ",
+			i+1 ,stat->addr, stat->name, stat->temperature,stat->humidity,
+			stat->neighbour_addr , stat->neighbour_name,stat->neighbour_temperature,stat->neighbour_humidity,
+			stat->distance,stat->rssi);
+	}
+	printk("\n ");
+
+	//display node_info list info on board
+	show_node_status();
+}
+
+/*blink board leds lights */
 void board_blink_leds(void)
 {
 	k_delayed_work_submit(&led_timer, K_MSEC(100));
 }
 
-void board_show_text(const char *text, bool center, k_timeout_t duration)
-{
-	int i;
-
-	cfb_framebuffer_clear(epd_dev, false);
-
-	for (i = 0; i < 3; i++) {
-		size_t len;
-
-		while (*text == ' ' || *text == '\n') {
-			text++;
-		}
-
-		len = get_len(FONT_MEDIUM, text);
-		if (!len) {
-			break;
-		}
-
-		text += print_line(FONT_MEDIUM, i, text, len, center);
-		if (!*text) {
-			break;
-		}
-	}
-
-	cfb_framebuffer_finalize(epd_dev);
-
-	if (!K_TIMEOUT_EQ(duration, K_FOREVER)) {
-		k_delayed_work_submit(&epd_work, duration);
-	}
-}
-
-void clear_screen(void)
-{
-	/*clear screen*/
-	uint8_t ppt = cfb_get_display_parameter(epd_dev, CFB_DISPLAY_PPT);
-	for (int i = 0 ; i < 15 ; i++)
-	{
-	   cfb_print(epd_dev, "                                               ", 0, i * ppt);
-	}
-}
-
-void show_sensors_data(k_timeout_t interval)
-{
-	struct sensor_value val[3];
-	uint8_t line = 0U;
-	uint16_t len = 0U;
-
-	cfb_framebuffer_clear(epd_dev, false);
-
-	/* hdc1010 */
-	if (get_hdc1010_val(val)) {
-		goto _error_get;
-	}
-
-	len = snprintf(str_buf, sizeof(str_buf), "Temperature:%d.%d C\n",
-		       val[0].val1, val[0].val2 / 100000);
-	print_line(FONT_SMALL, line++, str_buf, len, false);
-
-	len = snprintf(str_buf, sizeof(str_buf), "Humidity:%d%%\n",
-		       val[1].val1);
-	print_line(FONT_SMALL, line++, str_buf, len, false);
-
-	/* mma8652 */
-	if (get_mma8652_val(val)) {
-		goto _error_get;
-	}
-
-	len = snprintf(str_buf, sizeof(str_buf), "AX :%10.3f\n",
-		       sensor_value_to_double(&val[0]));
-	print_line(FONT_SMALL, line++, str_buf, len, false);
-
-	len = snprintf(str_buf, sizeof(str_buf), "AY :%10.3f\n",
-		       sensor_value_to_double(&val[1]));
-	print_line(FONT_SMALL, line++, str_buf, len, false);
-
-	len = snprintf(str_buf, sizeof(str_buf), "AZ :%10.3f\n",
-		       sensor_value_to_double(&val[2]));
-	print_line(FONT_SMALL, line++, str_buf, len, false);
-
-	/* apds9960 */
-	if (get_apds9960_val(val)) {
-		goto _error_get;
-	}
-
-	len = snprintf(str_buf, sizeof(str_buf), "Light :%d\n", val[0].val1);
-	print_line(FONT_SMALL, line++, str_buf, len, false);
-	len = snprintf(str_buf, sizeof(str_buf), "Proximity:%d\n", val[1].val1);
-	print_line(FONT_SMALL, line++, str_buf, len, false);
-
-	cfb_framebuffer_finalize(epd_dev);
-
-	k_delayed_work_submit(&epd_work, interval);
-
-	return;
-
-_error_get:
-	printk("Failed to get sensor data or print a string\n");
-}
-
-void show_main(void)
-{
-	char str[100];
-	int len, line = 0;
-
-	cfb_framebuffer_clear(epd_dev, true);
-	clear_screen();
-	
-	if(!mesh_is_initialized() || !mesh_is_prov_complete())
-	{
-		len = snprintk(str, sizeof(str), "Mesh Info:\n");
-		print_line(FONT_SMALL, line++, str, len, true);
-
-		len = snprintk(str, sizeof(str), "Device Name: %s", bt_get_name());
-		print_line(FONT_SMALL, line++, str, len, false);
-
-		char uuid_hex_str[8 + 1];
-		bin2hex(get_uuid(), 4, uuid_hex_str, sizeof(uuid_hex_str));
-		len = snprintk(str, sizeof(str), "Device UUID:  %s", uuid_hex_str);
-		print_line(FONT_SMALL, line++, str, len, false);
-
-		len = snprintk(str, sizeof(str),"Status: Advertising\n");
-		print_line(FONT_SMALL, line++, str, len, false);
-
-		len = snprintk(str, sizeof(str),"Self Address: %s", "Unassigned");
-		print_line(FONT_SMALL, line++, str, len, false);
-	}
-	else if(mesh_is_initialized() && mesh_is_prov_complete())
-	{
-
-		len = snprintk(str, sizeof(str), "Mesh Info:\n");
-		print_line(FONT_SMALL, line++, str, len, true);
-
-		len = snprintk(str, sizeof(str), "Device Name: %s", bt_get_name());
-		print_line(FONT_SMALL, line++, str, len, false);
-
-		char uuid_hex_str[8 + 1];
-		bin2hex(get_uuid(), 4, uuid_hex_str, sizeof(uuid_hex_str));
-		len = snprintk(str, sizeof(str), "Device UUID:  %s", uuid_hex_str);
-		print_line(FONT_SMALL, line++, str, len, false);
-
-		len = snprintk(str, sizeof(str),"Status: Provisioned\n");
-		print_line(FONT_SMALL, line++, str, len, false);
-
-		len = snprintk(str, sizeof(str), "Self- Address :0x%04x\n", get_my_addr());
-		print_line(FONT_SMALL, line++, str, len, false);
-
-		len = snprintk(str, sizeof(str), "Provisioner Addr:0x%04x\n", get_prov_addr());
-		print_line(FONT_SMALL, line++, str, len, false);
-
-	}
-	cfb_framebuffer_finalize(epd_dev);
-}
-
-static void epd_update(struct k_work *work)
-{
-	switch (screen_id) {
-	case SCREEN_SENSORS:
-		show_sensors_data(K_SECONDS(2));
-		return;
-	case SCREEN_MAIN:
-		show_main();
-		return;
-	}
-}
-
-static void long_press(struct k_work *work)
-{
-	/* Treat as release so actual release doesn't send messages */
-	pressed = false;
-	screen_id = (screen_id + 1) % SCREEN_LAST;
-	printk("Change screen to id = %d\n", screen_id);
-	board_refresh_display();
-}
-
-static bool button_is_pressed(void)
-{
-	return gpio_pin_get(gpio, DT_GPIO_PIN(DT_ALIAS(sw0), gpios)) > 0;
-}
-
-static void button_interrupt(const struct device *dev,
-			     struct gpio_callback *cb,
-			     uint32_t pins)
-{
-	if (button_is_pressed() == pressed) {
-		return;
-	}
-
-	pressed = !pressed;
-	printk("Button %s\n", pressed ? "pressed" : "released");
-
-	if (pressed) {
-		k_delayed_work_submit(&long_press_work, LONG_PRESS_TIMEOUT);
-		return;
-	}
-
-	k_delayed_work_cancel(&long_press_work);
-
-	if(!mesh_is_initialized() || !mesh_is_prov_complete()) {
-		return;
-	}
-
-	/* Short press for views */
-	switch (screen_id) {
-	case SCREEN_SENSORS:
-	case SCREEN_MAIN:
-		return;
-	default:
-		return;
-	}
-}
-
-static int configure_button(void)
-{
-	static struct gpio_callback button_cb;
-
-	gpio = device_get_binding(DT_GPIO_LABEL(DT_ALIAS(sw0), gpios));
-	if (!gpio) {
-		return -ENODEV;
-	}
-
-	gpio_pin_configure(gpio, DT_GPIO_PIN(DT_ALIAS(sw0), gpios),
-			   GPIO_INPUT | DT_GPIO_FLAGS(DT_ALIAS(sw0), gpios));
-
-	gpio_pin_interrupt_configure(gpio, DT_GPIO_PIN(DT_ALIAS(sw0), gpios),
-				     GPIO_INT_EDGE_BOTH);
-
-	gpio_init_callback(&button_cb, button_interrupt,
-			   BIT(DT_GPIO_PIN(DT_ALIAS(sw0), gpios)));
-
-	gpio_add_callback(gpio, &button_cb);
-
-	return 0;
-}
-
+/*set led state */
 int set_led_state(uint8_t id, bool state)
 {
 	return gpio_pin_set(leds[id].dev, leds[id].pin, state);
 }
 
+/* set led timeout */
 static void led_timeout(struct k_work *work)
 {
 	static int led_cntr;
 	int i;
 
-	/* Disable all LEDs */
+	// Disable all LEDs
 	for (i = 0; i < ARRAY_SIZE(leds); i++) {
 		set_led_state(i, 0);
 	}
 
-	/* Stop after 5 iterations */
+	// Stop after 5 iterations
 	if (led_cntr >= (ARRAY_SIZE(leds) * 5)) {
 		led_cntr = 0;
 		return;
 	}
 
-	/* Select and enable current LED */
+	// Select and enable current LED 
 	i = led_cntr++ % ARRAY_SIZE(leds);
 	set_led_state(i, 1);
 
 	k_delayed_work_submit(&led_timer, K_MSEC(100));
 }
 
+/* configure board leds */
 static int configure_leds(void)
 {
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(leds); i++) {
+	for (int i = 0; i < ARRAY_SIZE(leds); i++) {
 		leds[i].dev = device_get_binding(leds[i].name);
 		if (!leds[i].dev) {
-			printk("Failed to get %s device\n", leds[i].name);
 			return -ENODEV;
 		}
-
 		gpio_pin_configure(leds[i].dev, leds[i].pin,
-				   leds[i].flags |
-				   GPIO_OUTPUT_INACTIVE);
+				   leds[i].flags | GPIO_OUTPUT_INACTIVE);
 	}
-
 	k_delayed_work_init(&led_timer, led_timeout);
 	return 0;
 }
 
-void board_refresh_display(void)
+/*show text on board display */
+void board_show_text(const char * message_str, bool center)
 {
-	k_delayed_work_submit(&epd_work, K_NO_WAIT);
+	int line = 0;
+	epd_dev = device_get_binding(DISPLAY_DRIVER);
+	cfb_framebuffer_clear(epd_dev, true);
+	print_line(FONT_SMALL, line++, message_str, strlen(message_str), center);
+	cfb_framebuffer_finalize(epd_dev);
 }
 
-int board_init(void)
+/*initialize device board */
+void board_init(void)
 {
-	epd_dev = device_get_binding(DT_LABEL(DT_INST(0, solomon_ssd16xxfb)));
-	if (epd_dev == NULL) {
-		printk("SSD16XX device not found\n");
-		return -ENODEV;
-	}
-
-	if (cfb_framebuffer_init(epd_dev)) {
-		printk("Framebuffer initialization failed\n");
-		return -EIO;
-	}
-
+	epd_dev = device_get_binding(DISPLAY_DRIVER);	
+	cfb_framebuffer_init(epd_dev) ;
 	cfb_framebuffer_clear(epd_dev, true);
-
-	if (configure_button()) {
-		printk("Failed to configure button\n");
-		return -EIO;
-	}
-
-	if (configure_leds()) {
-		printk("LED init failed\n");
-		return -EIO;
-	}
-
-	k_delayed_work_init(&epd_work, epd_update);
-	k_delayed_work_init(&long_press_work, long_press);
-
-	pressed = button_is_pressed();
-	// if (pressed) {
-	// 	printk("Erasing storage\n");
-	// 	board_show_text("Resetting Device", false, K_SECONDS(4));
-	// 	erase_storage();
-	// }
-
-	return 0;
+	configure_leds();
 }

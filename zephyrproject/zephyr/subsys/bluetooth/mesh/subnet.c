@@ -82,6 +82,10 @@ static void key_refresh(struct bt_mesh_subnet *sub, uint8_t new_phase)
 		break;
 	/* Revoking keys */
 	case BT_MESH_KR_PHASE_3:
+		if (sub->kr_phase == BT_MESH_KR_NORMAL) {
+			return;
+		}
+		__fallthrough;
 	case BT_MESH_KR_NORMAL:
 		sub->kr_phase = BT_MESH_KR_NORMAL;
 		memcpy(&sub->keys[0], &sub->keys[1], sizeof(sub->keys[0]));
@@ -330,7 +334,7 @@ uint8_t bt_mesh_subnet_kr_phase_set(uint16_t net_idx, uint8_t *phase)
 {
 	/* Table in Bluetooth Mesh Profile Specification Section 4.2.14: */
 	const uint8_t valid_transitions[] = {
-		0x00, /* Normal phase: KR is started by key update */
+		BIT(BT_MESH_KR_PHASE_3), /* Normal phase: KR is started by key update */
 		BIT(BT_MESH_KR_PHASE_2) | BIT(BT_MESH_KR_PHASE_3), /* Phase 1 */
 		BIT(BT_MESH_KR_PHASE_3), /* Phase 2 */
 		/* Subnet is never in Phase 3 */
@@ -587,7 +591,6 @@ bool bt_mesh_net_cred_find(struct bt_mesh_net_rx *rx, struct net_buf_simple *in,
 
 	BT_DBG("");
 
-	rx->friend_cred = 1U;
 #if defined(CONFIG_BT_MESH_LOW_POWER)
 	if (bt_mesh_lpn_established()) {
 		rx->sub = bt_mesh.lpn.sub;
@@ -599,6 +602,8 @@ bool bt_mesh_net_cred_find(struct bt_mesh_net_rx *rx, struct net_buf_simple *in,
 
 			if (cb(rx, in, out, &bt_mesh.lpn.cred[j])) {
 				rx->new_key = (j > 0);
+				rx->friend_cred = 1U;
+				rx->ctx.net_idx = rx->sub->net_idx;
 				return true;
 			}
 		}
@@ -615,10 +620,6 @@ bool bt_mesh_net_cred_find(struct bt_mesh_net_rx *rx, struct net_buf_simple *in,
 	for (i = 0; i < ARRAY_SIZE(bt_mesh.frnd); i++) {
 		struct bt_mesh_friend *frnd = &bt_mesh.frnd[i];
 
-		if (!frnd->established) {
-			continue;
-		}
-
 		if (!frnd->subnet) {
 			continue;
 		}
@@ -632,6 +633,8 @@ bool bt_mesh_net_cred_find(struct bt_mesh_net_rx *rx, struct net_buf_simple *in,
 
 			if (cb(rx, in, out, &frnd->cred[j])) {
 				rx->new_key = (j > 0);
+				rx->friend_cred = 1U;
+				rx->ctx.net_idx = rx->sub->net_idx;
 				return true;
 			}
 		}
@@ -651,6 +654,8 @@ bool bt_mesh_net_cred_find(struct bt_mesh_net_rx *rx, struct net_buf_simple *in,
 
 			if (cb(rx, in, out, &rx->sub->keys[j].msg)) {
 				rx->new_key = (j > 0);
+				rx->friend_cred = 0U;
+				rx->ctx.net_idx = rx->sub->net_idx;
 				return true;
 			}
 		}
