@@ -26,6 +26,7 @@ static uint8_t node_uuid[16];
 static uint8_t device_key[16];
 static  uint8_t network_key[16] ;
 static  uint8_t application_key[16];
+static char node_info_list_str[600];
 
 static uint32_t record_count = 1;
 
@@ -50,6 +51,106 @@ K_SEM_DEFINE(sem_node_added, 0, 5);
 static struct bt_mesh_cfg_cli cfg_cli = {
 
 };
+
+/*generate integrated string of node_info list */
+static char * get_node_info_list_string()
+{
+	printk("Node Info List Integration String is %s\n\n",node_info_list_str);
+	return node_info_list_str;
+}
+
+/* generate integrated string of node_info list */
+static void generate_node_info_list_string()
+{
+	static struct neigh {
+	uint16_t neigh_addr;
+	int neigh_record_index;
+	} neighbour_addr_list[STAT_COUNT] = {
+		[0 ...(STAT_COUNT - 1)] = {},
+	};
+	static struct integration_str {
+	char my_info_str[100];
+	char all_neighbours_info_str[500];
+	} integration_string_list[2] = {
+		[0 ...(1)] = {},
+	};
+	
+	int neighbours_count = 0;
+	char my_info_str[100];
+	char all_neighbours_info_str[500];
+	struct integration_str *integration_str = &integration_string_list[0];
+	for (int i = 0; i < get_node_info_list_record_count(); i++)
+	{
+		struct stat *stat = &node_info[i];
+		if (stat->addr == get_my_address() && stat->neighbour_addr != BT_MESH_ADDR_UNASSIGNED)
+		{
+			struct neigh *neigh = &neighbour_addr_list[neighbours_count];
+			neigh->neigh_addr =  stat->neighbour_addr;
+			neigh->neigh_record_index = i;
+			neighbours_count++;
+		}
+	}
+	for (int i = 0; i < neighbours_count; i++)
+	{
+		struct neigh *neigh = &neighbour_addr_list[i];
+		struct stat *stat = &node_info[neigh->neigh_record_index];
+		if (stat->addr == get_my_address() && stat->neighbour_addr != BT_MESH_ADDR_UNASSIGNED)
+		{
+			if(i==0)
+				snprintf(my_info_str,50,"0x%04x,%d,%d,%d,0x%04x:%d",
+			         stat->addr,stat->temperature,stat->humidity,neighbours_count,
+					 stat->neighbour_addr,stat->distance);
+			else
+			{
+				char value_str[50];
+				snprintf(value_str,50,",0x%04x:%d",stat->neighbour_addr,stat->distance);
+				strcat(my_info_str,value_str);
+			}
+		}
+	}
+	strcat(my_info_str,";\0");
+	strcpy(integration_str->my_info_str ,my_info_str);
+
+	for (int j = 0; j < neighbours_count ; j++)
+	{
+		struct neigh *neigh = &neighbour_addr_list[j];
+		char neighbour_info_str[100];
+		for (int i = 0; i < get_node_info_list_record_count(); i++)
+		{
+			struct stat *stat = &node_info[i];
+			if (i == neigh->neigh_record_index)
+				snprintf(neighbour_info_str,50,"0x%04x,%d,%d,%d,0x%04x:%d",
+			         stat->neighbour_addr,stat->neighbour_temperature,stat->neighbour_humidity,neighbours_count,
+					 stat->addr,stat->distance);
+
+			else if (neigh->neigh_addr != get_my_address() &&  stat->addr !=get_my_address() && stat->neighbour_addr != BT_MESH_ADDR_UNASSIGNED)
+			{
+				if( neigh->neigh_addr == stat->addr)
+				{
+					char value_str[50];
+					snprintf(value_str,50,",0x%04x:%d",stat->neighbour_addr,stat->distance);
+					strcat(neighbour_info_str,value_str);
+				}
+				else if(neigh->neigh_addr == stat->neighbour_addr)
+				{
+					char value_str[50];
+					snprintf(value_str,50,",0x%04x:%d",stat->addr,stat->distance);
+					strcat(neighbour_info_str,value_str);
+				}
+			}
+		}
+		strcat(neighbour_info_str,";\0");
+		if(j==0)
+			strcpy(all_neighbours_info_str,neighbour_info_str);
+		else
+		{
+			strcat(all_neighbours_info_str,neighbour_info_str);
+		}
+	}
+	strcat(all_neighbours_info_str,"\0");
+	strcpy(integration_str->all_neighbours_info_str ,all_neighbours_info_str);
+	snprintk(node_info_list_str,600,"%s%s" ,integration_str->my_info_str,integration_str->all_neighbours_info_str);
+}
 
 /* print node_info list info on the board */
 void show_node_status()
@@ -225,17 +326,20 @@ static void receive_message(struct bt_mesh_model *model , struct bt_mesh_msg_ctx
 		address_name_token = strtok(NULL, "=");
 		snprintf(address_str,7,"0X000%s",address_name_token);
 		uint16_t address_hex = (uint16_t)strtol(address_str, NULL, 0);
-		int is_record_exists = check_if_record_neighbour_exists(from_address,address_hex);
-		
-		if (is_record_exists==0) 
+		if(address_hex!= BT_MESH_ADDR_UNASSIGNED)
 		{
-			struct stat *stat = &node_info[record_count];
-			stat->addr = from_address;
-			stat->neighbour_addr = address_hex;
-			address_name_token = strtok(NULL, "=");
-			snprintf(stat->neighbour_name, 4, "%s", address_name_token);
-			record_count++;
-		}	
+			int is_record_exists = check_if_record_neighbour_exists(from_address,address_hex);
+			
+			if (is_record_exists==0) 
+			{
+				struct stat *stat = &node_info[get_node_info_list_record_count()];
+				stat->addr = from_address;
+				stat->neighbour_addr = address_hex;
+				address_name_token = strtok(NULL, "=");
+				snprintf(stat->neighbour_name, 4, "%s", address_name_token);
+				record_count++;
+			}
+		}
 	}
 
 	//if message is of type "Neighbours Neighbours Update Info Message" with message code as U, 
@@ -311,6 +415,10 @@ static void receive_message(struct bt_mesh_model *model , struct bt_mesh_msg_ctx
 
 	//display node_info list info on board
 	show_node_status();
+
+	//generate and get the integration string of complete node_info_list
+	generate_node_info_list_string();
+	get_node_info_list_string();
 }
 
 static struct bt_mesh_model root_models[] = {
@@ -617,9 +725,9 @@ void mesh_start(void)
 		char node_address_str[7] , record_count_str[2];
 		snprintf(record_count_str,2,"%d", record_count);
 		snprintf(node_address_str , 7 ,"0X000%s", record_count_str);
-		uint16_t node_addr = (uint16_t)strtol(node_address_str, NULL, 0);
+		uint16_t addr = (uint16_t)strtol(node_address_str, NULL, 0);
 
-		err = bt_mesh_provision_adv(node_uuid, NET_IDX, node_addr, 0);
+		err = bt_mesh_provision_adv(node_uuid, NET_IDX, addr, 0);
 		if (err < 0) {
 			continue;
 		}

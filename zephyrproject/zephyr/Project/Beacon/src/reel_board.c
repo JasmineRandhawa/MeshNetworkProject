@@ -398,16 +398,19 @@ void board_add_node_and_neighbours_data(uint16_t from_address, char * message_st
 		address_name_token = strtok(NULL, "=");
 		snprintf(address_str,7,"0X000%s",address_name_token);
 		uint16_t address_hex = (uint16_t)strtol(address_str, NULL, 0);
-		int is_record_exists = check_if_record_neighbour_exists(from_address,address_hex);
-		
-		if (is_record_exists==0) 
+		if(address_hex!= BT_MESH_ADDR_UNASSIGNED)
 		{
-			struct stat *stat = &node_info[record_count];
-			stat->addr = from_address;
-			stat->neighbour_addr = address_hex;
-			address_name_token = strtok(NULL, "=");
-			snprintf(stat->neighbour_name, 4, "%s", address_name_token);
-			record_count++;
+			int is_record_exists = check_if_record_neighbour_exists(from_address,address_hex);
+			
+			if (is_record_exists==0) 
+			{
+				struct stat *stat = &node_info[record_count];
+				stat->addr = from_address;
+				stat->neighbour_addr = address_hex;
+				address_name_token = strtok(NULL, "=");
+				snprintf(stat->neighbour_name, 4, "%s", address_name_token);
+				record_count++;
+			}
 		}	
 	}
 

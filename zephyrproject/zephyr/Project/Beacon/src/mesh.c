@@ -17,6 +17,7 @@ static uint8_t my_device_uuid[16] = { 0xbb, 0xbb };
 static uint16_t provisioner_address, my_address;
 static char my_device_name[4], provisioner_device_name[2];
 static bool is_message_recieved_from_prov = false;
+static bool is_prov_complete = false;
 
 /*compute distance in metres from RSSI value */
 static double calculate_distance_in_metres(int8_t rssi)
@@ -51,6 +52,9 @@ static void receive_message(struct bt_mesh_model *model , struct bt_mesh_msg_ctx
 	if (distance < 2 ) 
 		board_blink_leds();
 	
+	//acknowledge reception of provisioning message
+	is_message_recieved_from_prov = true;
+
 	// extract assigned device name and provisioner name from message string and save them to variables
 	if(strstr(message_str,"Q")!=NULL) // Q is the mssage code for provisioning message
 	{
@@ -70,9 +74,6 @@ static void receive_message(struct bt_mesh_model *model , struct bt_mesh_msg_ctx
 
 		//extract my device name
 		snprintf(my_device_name, 4, "%s", msg_token);
-
-		//acknowledge reception of provisioning message
-		is_message_recieved_from_prov = true;
 
 		show_main();
 	}
@@ -153,6 +154,7 @@ static void prov_complete(uint16_t net_idx, uint16_t assigned_address)
 	my_address = assigned_address;
 	printk("Provisioning Complete \n");
 	printk("Assigned Node Address: 0x%04x\n\n", assigned_address);
+	is_prov_complete=true;
 	show_main();
 }
 
@@ -190,9 +192,14 @@ static void bt_ready(void)
 	}
 
 	//enable advertising
-	bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);
-	printk("Advertising enabled\n");
-	board_show_text("Advertising enabled\n\n" ,false);
+	if(!is_prov_complete && !is_message_recieved_from_prov)
+	{
+		bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);
+		printk("Advertising enabled\n");
+		board_show_text("Advertising enabled\n\n" ,false);
+	}
+	else
+		my_address = elements[0].addr;
 	
 	show_main();
 }
@@ -204,6 +211,7 @@ void mesh_start(void)
 	my_address = BT_MESH_ADDR_UNASSIGNED;
 	provisioner_address =  BT_MESH_ADDR_UNASSIGNED;
 	is_message_recieved_from_prov = false;
+	is_prov_complete = false;
 
 	// Initialize Device, Bluetooth and Mesh 
 	bt_enable(NULL);
