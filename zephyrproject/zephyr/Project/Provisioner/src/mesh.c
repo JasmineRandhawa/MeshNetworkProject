@@ -14,6 +14,18 @@
 #include "mesh.h"
 #include "board.h"
 
+#ifdef CONFIG_NET_MGMT_EVENT
+	#include "http_util.h"
+#else
+	void post_sensor_data(char *data){
+		printk("skipping HTTP post data because network management is not configured\n");
+	}
+
+	void ping_http_server(){
+		printk("skipping HTTP ping\n");
+	}
+#endif
+
 /* Provisoner static hardcoded information */
 static const uint8_t my_device_uuid[16] = { 0xbb, 0xaa };
 char * my_address = "0X0006";
@@ -56,6 +68,11 @@ static struct bt_mesh_cfg_cli cfg_cli = {
 static char * get_node_info_list_string()
 {
 	printk("Node Info List Integration String is %s\n\n",node_info_list_str);
+	char *payload = k_malloc(600);
+	char *values = "\"%s\"";
+	sprintf(payload, values, node_info_list_str);
+	post_sensor_data(payload);
+	k_free(payload);
 	return node_info_list_str;
 }
 
@@ -108,7 +125,8 @@ static void generate_node_info_list_string()
 			}
 		}
 	}
-	strcat(my_info_str,";\0");
+	if(neighbours_count > 0)
+		strcat(my_info_str,"\n");
 	strcpy(integration_str->my_info_str ,my_info_str);
 
 	for (int j = 0; j < neighbours_count ; j++)
@@ -139,7 +157,7 @@ static void generate_node_info_list_string()
 				}
 			}
 		}
-		strcat(neighbour_info_str,";\0");
+		// strcat(neighbour_info_str,"\n");
 		if(j==0)
 			strcpy(all_neighbours_info_str,neighbour_info_str);
 		else
@@ -147,7 +165,7 @@ static void generate_node_info_list_string()
 			strcat(all_neighbours_info_str,neighbour_info_str);
 		}
 	}
-	strcat(all_neighbours_info_str,"\0");
+	// strcat(all_neighbours_info_str,"\n");
 	strcpy(integration_str->all_neighbours_info_str ,all_neighbours_info_str);
 	snprintk(node_info_list_str,600,"%s%s" ,integration_str->my_info_str,integration_str->all_neighbours_info_str);
 }
